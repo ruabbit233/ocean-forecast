@@ -4,19 +4,6 @@
             <div class="formContainer">
                 <!-- <h3 class="title">{{ t('routePlanning.title') }}</h3> -->
 
-                <!-- <section class="formRow">
-                <b-field :label="t('routePlanning.selectDate')">
-                    <b-datepicker
-                        v-model="selectedDate"
-                        size="is-small"
-                        :placeholder="t('routePlanning.datePlaceholder')"
-                        :min-date="minSelectableDate"
-                        :max-date="maxSelectableDate"
-                        trap-focus
-                    />
-                </b-field>
-            </section> -->
-
                 <section class="formRow">
                     <b-field :label="t('routePlanning.departureDate')">
                         <b-datepicker
@@ -42,7 +29,7 @@
                 <section class="formRow">
                     <b-field :label="t('routePlanning.endPoint')">
                         <b-radio v-for="point in routePoints" :key="`end-${point.value}`" v-model="endPoint"
-                            name="end-point" :native-value="point.value" type="is-dark" size="is-small"  class="radioItem">
+                            name="end-point" :native-value="point.value" type="is-dark" size="is-small" class="radioItem">
                             {{ point.label }}
                         </b-radio>
                     </b-field>
@@ -51,8 +38,6 @@
                 <b-button class="submitBtn" type="is-dark" size="is-small" @click="submitForm">
                     {{ t('common.button.submitAnalysis') }}
                 </b-button>
-
-
             </div>
 
             <section class="taskListSection">
@@ -61,7 +46,7 @@
                     {{ t('routePlanning.taskListEmpty') }}
                 </p>
                 <div v-else class="taskList">
-                    <article v-for="task in taskList" :key="task.taskId" class="taskItem" >
+                    <article v-for="task in taskList" :key="task.taskId" class="taskItem">
                         <p class="taskLine">
                             <span><span style="margin-right:10px">ID:#{{ task.taskId }}</span>{{ formatDateTime(task.createdAt) }}</span>
                             <span :class="statusClass(task.status)">
@@ -96,23 +81,108 @@
             <p class="summary" v-else>
                 {{ t('routePlanning.emptyHint') }}
             </p>
-            <RoutePhere ref="routePhereRef" :route-ports="ROUTE_PORTS" :selected-start-point="startPoint"
-                :selected-end-point="endPoint" :route-result="activeTask?.result || null" class="sphereBox" />
 
-            <section v-if="activeTask && activeTask.result" class="resultMeta">
-                <div class="metaGrid">
-                    <article class="metaCard" v-for="item in resultMetaCards" :key="item.key">
-                        <p class="metaLabel">{{ item.label }}</p>
-                        <p class="metaValue">{{ item.value }}</p>
-                    </article>
+            <div class="visualLayout">
+                <div class="globePanel">
+                    <RoutePhere
+                        ref="routePhereRef"
+                        :route-ports="ROUTE_PORTS"
+                        :selected-start-point="startPoint"
+                        :selected-end-point="endPoint"
+                        :route-result="activeTask?.result || null"
+                        :sea-ice-frames="normalizedSeaIceFrames"
+                        :local-risk-frames="normalizedLocalRiskFrames"
+                        class="sphereBox"
+                        @playback-change="handlePlaybackChange"
+                    />
+
+                    <section v-if="activeTask && activeTask.result" class="resultMeta">
+                        <div class="metaGrid">
+                            <article class="metaCard" v-for="item in resultMetaCards" :key="item.key">
+                                <p class="metaLabel">{{ item.label }}</p>
+                                <p class="metaValue">{{ item.value }}</p>
+                            </article>
+                        </div>
+
+                        <p v-if="activeTask.error" class="taskError">
+                            {{ t('routePlanning.meta.error') }}: {{ activeTask.error }}
+                        </p>
+                    </section>
                 </div>
 
-                <p v-if="activeTask.error" class="taskError">
-                    {{ t('routePlanning.meta.error') }}: {{ activeTask.error }}
-                </p>
-            </section>
+                <aside v-if="hasResult" class="sidePanels">
+                    <section class="riskPanel riskPanelTop">
+                        <div class="panelHeader">
+                            <div>
+                                <p class="panelTitle">{{ t('routePlanning.riskImagesTitle') }}</p>
+                                <p class="panelSubTitle">{{ currentRiskImageTitle }}</p>
+                            </div>
+                            <b-button
+                                size="is-small"
+                                type="is-white"
+                                outlined
+                                :disabled="!riskImagesDownloadUrl"
+                                @click="downloadByUrl(riskImagesDownloadUrl)"
+                            >
+                                {{ t('routePlanning.downloadRiskImages') }}
+                            </b-button>
+                        </div>
+
+                        <div v-if="normalizedRiskImages.length" class="riskCarouselWrap">
+                            <b-carousel v-model="activeRiskImageIndex" :autoplay="false" :pause-hover="true" progress-type="is-dark" pause-text="" :arrow="false">
+                                <b-carousel-item v-for="(item, index) in normalizedRiskImages" :key="`${item.title}-${index}`">
+                                    <section>
+                                        <div class="riskImageCard" @click="openRiskImagePreview(item)">
+                                            <img :src="item.imageUrl" :alt="item.title">
+                                            <p>{{ item.title }}</p>
+                                        </div>
+                                    </section>
+                                </b-carousel-item>
+                            </b-carousel>
+                        </div>
+                        <p v-else class="panelEmpty">{{ t('routePlanning.riskImagesEmpty') }}</p>
+                    </section>
+
+                    <section class="riskPanel riskPanelBottom">
+                        <div class="panelHeader">
+                            <div>
+                                <p class="panelTitle">{{ t('routePlanning.localRiskTitle') }}</p>
+                                <p class="panelSubTitle">{{ currentPlaybackDateLabel || '-' }}</p>
+                            </div>
+                            <b-button
+                                size="is-small"
+                                 type="is-white"
+                                outlined
+                                :disabled="!localRiskImagesDownloadUrl"
+                                @click="downloadByUrl(localRiskImagesDownloadUrl)"
+                            >
+                                {{ t('routePlanning.downloadLocalRiskImages') }}
+                            </b-button>
+                        </div>
+
+                        <div v-if="currentLocalRiskFrame?.imageUrl" class="localRiskCard">
+                            <img :src="currentLocalRiskFrame.imageUrl" :alt="currentLocalRiskFrame.title || t('routePlanning.localRiskTitle')">
+                            <div class="localRiskMeta">
+                                <!-- <p><strong>{{ t('routePlanning.localRiskCurrentTitle') }}：</strong>{{ currentLocalRiskFrame.title || '-' }}</p> -->
+                                <p><strong>{{ t('routePlanning.localRiskCoordinates') }}：</strong>{{ currentLocalRiskFrame.coordsText || '-' }}</p>
+                            </div>
+                        </div>
+                        <div v-else class="localRiskEmptyState">
+                            <p class="panelEmpty">{{ t('routePlanning.localRiskEmpty') }}</p>
+                            <p class="panelEmptyHint">{{ currentPlaybackDateLabel || '-' }}</p>
+                        </div>
+                    </section>
+                </aside>
+            </div>
         </div>
     </div>
+
+    <b-modal v-model="isRiskPreviewModalActive">
+        <div v-if="riskPreviewImage" class="riskPreviewModal">
+            <img :src="riskPreviewImage.imageUrl" :alt="riskPreviewImage.title">
+            <p>{{ riskPreviewImage.title }}</p>
+        </div>
+    </b-modal>
 </template>
 
 <script setup>
@@ -124,17 +194,26 @@ import { useRoutePlanningStore } from '@/store'
 
 const { t, te } = useI18n()
 const routePlanningStore = useRoutePlanningStore()
+const websiteUrl = import.meta.env.VITE_WEBSITE_URL || ''
+const downloadBaseUrl = import.meta.env.VITE_DOWNLOAD_BASE_URL || ''
 
 const startPoint = ref('')
 const endPoint = ref('')
 const departureDate = ref(null)
 const routePhereRef = ref(null)
 const hasResult = ref(false)
+const activeRiskImageIndex = ref(0)
+const currentLocalRiskFrame = ref(null)
+const currentPlaybackDateLabel = ref('')
+const riskPreviewImage = ref(null)
+const isRiskPreviewModalActive = ref(false)
 
 const departureDateMin = new Date(2025, 6, 1)
 const departureDateMax = new Date(2025, 7, 31)
 const taskList = computed(() => routePlanningStore.taskList)
 const activeTask = computed(() => routePlanningStore.activeTask)
+const routeResultData = computed(() => activeTask.value?.result || null)
+const canClearRenderedResult = computed(() => !!activeTask.value?.result)
 
 const getPortLabel = (portName) => {
     const key = `routePlanning.portLabels.${portName}`
@@ -171,6 +250,122 @@ const normalizedDepartureDate = computed(() => {
     return isDepartureDateInRange(departureDate.value) ? departureDate.value : null
 })
 
+const normalizeAssetUrl = (url) => {
+    if (!url || typeof url !== 'string') return ''
+    if (/^https?:\/\//i.test(url)) return url
+    if (url.startsWith('/')) return `${websiteUrl}${url}`
+    return `${websiteUrl}/${url}`
+}
+
+const normalizeApiUrl = (url) => {
+    if (!url || typeof url !== 'string') return ''
+    if (/^https?:\/\//i.test(url)) return url
+    const base = downloadBaseUrl.trim().replace(/\/$/, '')
+    const path = url.startsWith('/') ? url : `/${url}`
+    return base ? `${base}${path}` : path
+}
+
+const normalizeDateValue = (value) => {
+    if (!value) return null
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return null
+    return parsed
+}
+
+const formatDateKey = (value) => {
+    const date = normalizeDateValue(value)
+    if (!date) return ''
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+}
+
+const formatDateLabel = (value) => {
+    const date = normalizeDateValue(value)
+    if (!date) return ''
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${month}-${day}`
+}
+
+const resolveFrameDateValue = (item) => {
+    return item?.date || item?.forecast_date || item?.voyage_date || item?.current_date || item?.time || item?.datetime || ''
+}
+
+const formatCoordValue = (value) => {
+    const numericValue = Number(value)
+    if (!Number.isFinite(numericValue)) return '-'
+    return numericValue.toFixed(4)
+}
+
+const normalizedSeaIceFrames = computed(() => {
+    const items = routeResultData.value?.sea_ice_images
+    if (!Array.isArray(items)) return []
+
+    return items.map((item) => {
+        const rawDate = resolveFrameDateValue(item)
+        const rectangleDegrees = item?.rectangle_degrees || item?.rectangle || item?.cesium_rectangle
+        return {
+            rawDate,
+            dateKey: formatDateKey(rawDate),
+            dateLabel: formatDateLabel(rawDate),
+            cesiumUrl: normalizeAssetUrl(item?.cesium_image_url || item?.url || item?.path || item?.image_url || ''),
+            rectangle: Array.isArray(rectangleDegrees)
+                ? rectangleDegrees
+                : rectangleDegrees
+                    ? [rectangleDegrees.west, rectangleDegrees.south, rectangleDegrees.east, rectangleDegrees.north]
+                    : undefined,
+            west: item?.west,
+            south: item?.south,
+            east: item?.east,
+            north: item?.north,
+            alpha: item?.alpha
+        }
+    }).filter((item) => item.dateKey && item.cesiumUrl)
+})
+
+const normalizedRiskImages = computed(() => {
+    const items = routeResultData.value?.risk_images
+    if (!Array.isArray(items)) return []
+
+    return items.map((item, index) => ({
+        index,
+        title: item?.name || item?.title || `${t('routePlanning.riskImageFallbackTitle')} ${index + 1}`,
+        imageUrl: normalizeAssetUrl(item?.url || item?.image_url || item?.path || '')
+    })).filter((item) => item.imageUrl)
+})
+
+const normalizedLocalRiskFrames = computed(() => {
+    const items = routeResultData.value?.local_risk_image_url
+    if (!Array.isArray(items)) return []
+
+    return items.map((item) => {
+        const rawDate = resolveFrameDateValue(item)
+        const lat = item?.lat ?? item?.latitude ?? item?.coord_lat ?? item?.y
+        const lon = item?.lon ?? item?.lng ?? item?.longitude ?? item?.coord_lon ?? item?.x
+        return {
+            rawDate,
+            dateKey: formatDateKey(rawDate),
+            dateLabel: formatDateLabel(rawDate),
+            title: item?.title || item?.name || '',
+            imageUrl: normalizeAssetUrl(item?.image_url || item?.url || item?.path || item?.cesium_image_url || ''),
+            lat,
+            lon,
+            coordsText: `Lat ${formatCoordValue(lat)}, Lon ${formatCoordValue(lon)}`
+        }
+    }).filter((item) => item.dateKey && item.imageUrl)
+})
+
+const riskImagesDownloadUrl = computed(() => normalizeApiUrl(routeResultData.value?.risk_images_download_url || ''))
+const localRiskImagesDownloadUrl = computed(() => normalizeApiUrl(routeResultData.value?.local_risk_images_download_url || ''))
+
+const currentRiskImageTitle = computed(() => {
+    const current = normalizedRiskImages.value[activeRiskImageIndex.value]
+    return current?.title || t('routePlanning.riskImagesEmpty')
+})
+
 const routeSummary = computed(() => {
     if (!hasResult.value || !activeTask.value) return ''
     return t('routePlanning.taskSummary', {
@@ -190,9 +385,6 @@ const formatDistanceNmText = (nm) => {
     if (!Number.isFinite(value)) return '-'
     return t('routePlanning.meta.distanceNmValue', { value: value.toFixed(1) })
 }
-
-const routeResultData = computed(() => activeTask.value?.result || null)
-const canClearRenderedResult = computed(() => !!activeTask.value?.result)
 
 const resultStartPortText = computed(() => {
     const result = routeResultData.value
@@ -257,17 +449,19 @@ const statusClass = (status) => {
     return 'statusProcessing'
 }
 
-const selectTask = (taskId) => {
-    if (!taskId) return
-    routePlanningStore.setActiveTask(taskId)
-}
-
 const loadTaskResult = async (taskId) => {
     const task = taskList.value.find((item) => item.taskId === taskId)
     if (!task || task.status !== 'COMPLETED') return
     routePlanningStore.setActiveTask(task.taskId)
     await nextTick()
     hasResult.value = true
+    if (normalizedRiskImages.value.length) {
+        activeRiskImageIndex.value = 0
+    }
+    if (normalizedLocalRiskFrames.value.length) {
+        currentLocalRiskFrame.value = normalizedLocalRiskFrames.value[0]
+        currentPlaybackDateLabel.value = normalizedLocalRiskFrames.value[0].dateLabel || ''
+    }
     openToast('routePlanning.loadSuccess')
 }
 
@@ -275,6 +469,30 @@ const clearRenderedResult = () => {
     routePhereRef.value?.clearRouteResult?.()
     routePlanningStore.setActiveTask(null)
     hasResult.value = false
+    currentLocalRiskFrame.value = null
+    currentPlaybackDateLabel.value = ''
+    activeRiskImageIndex.value = 0
+}
+
+const handlePlaybackChange = (payload = {}) => {
+    currentPlaybackDateLabel.value = payload?.dateLabel || ''
+    currentLocalRiskFrame.value = payload?.localRiskFrame || null
+}
+
+const openRiskImagePreview = (item) => {
+    if (!item?.imageUrl) return
+    riskPreviewImage.value = item
+    isRiskPreviewModalActive.value = true
+}
+
+const closeRiskImagePreview = () => {
+    isRiskPreviewModalActive.value = false
+    riskPreviewImage.value = null
+}
+
+const downloadByUrl = (url) => {
+    if (!url) return
+    window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 const submitForm = async () => {
@@ -305,6 +523,9 @@ const submitForm = async () => {
             departureDate: formatDepartureDate(normalizedDepartureDate.value)
         })
         hasResult.value = false
+        currentLocalRiskFrame.value = null
+        currentPlaybackDateLabel.value = ''
+        activeRiskImageIndex.value = 0
         openToast('routePlanning.submitSuccess')
     } catch (error) {
         errorToast('common.message.uploadFail')
@@ -328,6 +549,8 @@ watch(
     (task) => {
         if (!task) {
             hasResult.value = false
+            currentLocalRiskFrame.value = null
+            currentPlaybackDateLabel.value = ''
             return
         }
         hasResult.value = task.status === 'COMPLETED' && !!task.result
@@ -335,11 +558,23 @@ watch(
     { deep: true, immediate: true }
 )
 
+watch(
+    () => normalizedRiskImages.value.length,
+    (length) => {
+        if (!length) {
+            activeRiskImageIndex.value = 0
+            return
+        }
+        if (activeRiskImageIndex.value >= length) {
+            activeRiskImageIndex.value = 0
+        }
+    },
+    { immediate: true }
+)
 </script>
 
 <style scoped lang="scss">
 $container-height: 560px;
-$form-container-height: 400px;
 
 .routePlanningContainer {
     display: flex;
@@ -357,7 +592,7 @@ $form-container-height: 400px;
     }
 
     .leftContainer {
-        width: 340px;
+        width: 310px;
         display: flex;
         flex-direction: column;
         gap: 14px;
@@ -366,7 +601,6 @@ $form-container-height: 400px;
 
     .formContainer {
         width: 100%;
-        // height: $form-container-height;
         padding: 18px;
         border-radius: 10px;
         background-color: var(--bulma-scheme-main);
@@ -440,11 +674,6 @@ $form-container-height: 400px;
             cursor: pointer;
             min-height: 72px;
 
-            &.active {
-                border-color: rgba(255, 255, 255, 0.5);
-                background: rgba(35, 56, 78, 0.42);
-            }
-
             .taskLine {
                 display: flex;
                 justify-content: space-between;
@@ -490,19 +719,159 @@ $form-container-height: 400px;
             min-height: 24px;
             margin-bottom: 10px;
             font-size: 14px;
-            
         }
 
-        .resultActions {
-            margin-bottom: 10px;
+        .visualLayout {
             display: flex;
-            justify-content: flex-end;
+            gap: 14px;
+            min-height: 410px;
+            align-items: flex-start;
+        }
+
+        .globePanel {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(8, 13, 20, 0.42);
+            border: 1px solid rgba(255, 255, 255, 0.12);
         }
 
         .sphereBox {
-            height: calc($container-height - 70px);
+            flex: 0 0 auto;
+            min-width: 0;
+            height: 320px;
             border-radius: 8px;
-            // overflow: hidden;
+        }
+
+        .sidePanels {
+            width: 420px;
+            height: 560px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .riskPanel {
+            flex: 1;
+            border-radius: 10px;
+            background: rgba(8, 13, 20, 0.58);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 12px;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .riskPanelTop,
+        .riskPanelBottom {
+            height: 0;
+        }
+
+        .panelHeader {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .panelTitle {
+            color: #fff;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+
+        .panelSubTitle {
+            color: #aebdcd;
+            font-size: 11px;
+            margin-bottom: 0;
+            line-height: 1.4;
+        }
+
+        .panelEmpty,
+        .panelEmptyHint {
+            color: #9fb0c2;
+            font-size: 12px;
+            margin-bottom: 0;
+        }
+
+        .riskCarouselWrap {
+            height: calc(100% - 46px);
+
+            :deep(.carousel) {
+                height: 100%;
+            }
+
+            :deep(.carousel-items) {
+                height: 100%;
+            }
+
+            :deep(.carousel-item) {
+                height: 100%;
+            }
+        }
+
+        .riskImageCard,
+        .localRiskCard {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .riskImageCard {
+            cursor: zoom-in;
+        }
+
+        .riskImageCard img {
+            max-width: calc(100% - 200px);
+            max-height: calc(100% - 50px);
+            object-fit: contain;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.04);
+        }
+          .localRiskCard img {
+            max-width: calc(100% - 20px);
+            max-height: calc(100% - 50px);
+            object-fit: contain;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+
+        .riskImageCard p {
+            color: #dbe3ec;
+            font-size: 12px;
+            margin-bottom: 0;
+            text-align: center;
+            line-height: 1.4;
+        }
+
+        .localRiskMeta {
+            width: 100%;
+
+            p {
+                color: #dbe3ec;
+                font-size: 12px;
+                line-height: 1.5;
+                margin-bottom: 4px;
+                word-break: break-word;
+            }
+        }
+
+        .localRiskEmptyState {
+            height: calc(100% - 46px);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
         }
 
         .resultMeta {
@@ -513,7 +882,7 @@ $form-container-height: 400px;
 
             .metaGrid {
                 display: grid;
-                grid-template-columns: repeat(3, minmax(0, 1fr));
+                grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 10px;
             }
 
@@ -545,17 +914,46 @@ $form-container-height: 400px;
                 margin-top: 8px;
                 margin-bottom: 0;
             }
+        }
+    }
+}
 
-            @media (max-width: 1100px) {
-                .metaGrid {
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
-                }
+.riskPreviewModal {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 12px;
+
+    img {
+        max-width: min(80vw, 960px);
+        max-height: 75vh;
+        object-fit: contain;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04);
+    }
+
+    p {
+        color: #fff;
+        font-size: 14px;
+        line-height: 1.5;
+        margin-bottom: 0;
+        text-align: center;
+    }
+}
+
+@media screen and (max-width: 1200px) {
+    .routePlanningContainer {
+        .resultContainer {
+            .visualLayout {
+                flex-direction: column;
             }
 
-            @media (max-width: 760px) {
-                .metaGrid {
-                    grid-template-columns: minmax(0, 1fr);
-                }
+            .sidePanels {
+                width: 100%;
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
         }
     }
@@ -577,24 +975,28 @@ $form-container-height: 400px;
 
         .formContainer,
         .taskListSection {
-            width: auto;
             flex: 1;
-            margin: 0;
-            height: auto;
+            width: auto;
         }
+    }
+}
 
-        .taskListSection {
-            min-height: 230px;
+@media screen and (max-width: 760px) {
+    .routePlanningContainer {
+        .leftContainer {
+            flex-direction: column;
         }
 
         .resultContainer {
-            width: 100%;
-            margin: 10px 0;
-            height: auto;
-        }
+            .sidePanels {
+                grid-template-columns: minmax(0, 1fr);
+            }
 
-        .resultContainer .sphereBox {
-            height: 420px;
+            .resultMeta {
+                .metaGrid {
+                    grid-template-columns: minmax(0, 1fr);
+                }
+            }
         }
     }
 }

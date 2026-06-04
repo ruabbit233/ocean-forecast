@@ -1,26 +1,31 @@
 <template>
 	<div class="routeSphereContainer">
 		<div ref="cesiumContainerRef" class="cesiumContainer"></div>
+		<div v-if="currentDateLabel" class="currentDateBadge">
+			{{ currentDateLabel }}
+		</div>
 	</div>
 </template>
 
 <script setup>
 import * as Cesium from 'cesium'
-import {get_daily_realtime_tiles} from '@/api'
+
 const props = defineProps({
-	initialCoords: { type: Array, default: () => [-180, 30, 180, 90] },
-	routePorts: {type: Array, default: () => []},
+	initialCoords: { type: Array, default: () => [-180, 90, 180, 90] },
+	routePorts: { type: Array, default: () => [] },
 	selectedStartPoint: { type: String, default: '' },
 	selectedEndPoint: { type: String, default: '' },
-	routeResult: { type: Object, default: null }
+	routeResult: { type: Object, default: null },
+	seaIceFrames: { type: Array, default: () => [] },
+	localRiskFrames: { type: Array, default: () => [] }
 })
+
+const emit = defineEmits(['playback-change'])
 
 const viewer = ref(null)
 const imageryLayers = ref(null)
 const cesiumContainerRef = ref(null)
 const seaIceLayer = ref(null)
-const routeLayer = ref(null)
-const dailyForecastData = ref(null) // 未来14天预报帧数据
 let creditEl = null
 const portEntities = new Map()
 const resultImageLayers = ref([])
@@ -31,9 +36,12 @@ const focusableRouteEntities = ref([])
 const hoverFocusedEntity = ref(null)
 const selectedFocusedEntity = ref(null)
 const activeFocusedEntity = ref(null)
+const currentDateLabel = ref('')
 let routeFocusHandler = null
 let routeAnimationTimer = null
 const websiteUrl = import.meta.env.VITE_WEBSITE_URL || ''
+const ROUTE_FRAME_INTERVAL = 100
+const ROUTE_PROGRESS_SUBSTEPS = 6
 
 const PORT_ENTITY_ID_PREFIX = 'route-port-'
 const START_PORT_COLOR = Cesium.Color.fromCssColorString('#2fa35f')
@@ -84,6 +92,23 @@ const clearResultLayers = () => {
 	resultImageLayers.value = []
 }
 
+const stopRoutePlayback = () => {
+	if (routeAnimationTimer) {
+		clearInterval(routeAnimationTimer)
+		routeAnimationTimer = null
+	}
+}
+
+const clearPlaybackState = () => {
+	currentDateLabel.value = ''
+	emit('playback-change', {
+		index: -1,
+		dateKey: '',
+		dateLabel: '',
+		localRiskFrame: null
+	})
+}
+
 const clearRouteEntities = () => {
 	if (!viewer.value) return
 	clearRouteFocusState()
@@ -115,10 +140,7 @@ const clearRouteEntities = () => {
 	}
 	routeEndpointEntities.value = []
 
-	if (routeAnimationTimer) {
-		clearInterval(routeAnimationTimer)
-		routeAnimationTimer = null
-	}
+	stopRoutePlayback()
 }
 
 const isEntityFocusable = (entity) => {
@@ -174,12 +196,12 @@ const getRoutePointTitle = (index) => `Route Point : ${index}`
 const createCoordinateDescription = ({ lat, lon, title = '' }) => {
 	const titleLine = title ? `<div><strong>${title}</strong></div>` : ''
 	return `
-		<div style="line-height: 1.7; font-size: 13px;">
-			${titleLine}
-			<div><strong>Latitude:</strong> ${formatCoordinate(lat)}</div>
-			<div><strong>Longitude:</strong> ${formatCoordinate(lon)}</div>
-		</div>
-	`
+			<div style="line-height: 1.7; font-size: 13px;">
+				${titleLine}
+				<div><strong>Latitude:</strong> ${formatCoordinate(lat)}</div>
+				<div><strong>Longitude:</strong> ${formatCoordinate(lon)}</div>
+			</div>
+		`
 }
 
 const setupRouteFocusInteraction = () => {
@@ -228,12 +250,12 @@ const renderPortEntities = () => {
 			id: portEntityId,
 			name: port.name,
 			description: `
-				<div style="line-height: 1.7; font-size: 13px;">
-					<div><strong>ID:</strong> ${portEntityId}</div>
-					<div><strong>Latitude:</strong> ${port.lat}</div>
-					<div><strong>Longitude:</strong> ${port.lon}</div>
-				</div>
-			`,
+					<div style="line-height: 1.7; font-size: 13px;">
+						<div><strong>ID:</strong> ${portEntityId}</div>
+						<div><strong>Latitude:</strong> ${port.lat}</div>
+						<div><strong>Longitude:</strong> ${port.lon}</div>
+					</div>
+				`,
 			position: Cesium.Cartesian3.fromDegrees(port.lon, port.lat),
 			point: {
 				pixelSize: selected ? 14 : 9,
@@ -277,32 +299,32 @@ const normalizeImageItems = (result) => {
 
 	const normalized = Array.isArray(imageCandidates)
 		? imageCandidates
-		.map((item) => {
-			if (typeof item === 'string') {
-				return { url: resolveAssetUrl(item) }
-			}
+			.map((item) => {
+				if (typeof item === 'string') {
+					return { url: resolveAssetUrl(item) }
+				}
 
-			const rectangleDegrees = item?.rectangle_degrees || item?.rectangle
-			return {
-				url: resolveAssetUrl(item.url || item.path || item.image_url || item.cesium_image_url || ''),
-				rectangle: Array.isArray(rectangleDegrees)
-					? rectangleDegrees
-					: rectangleDegrees
-						? [
-							rectangleDegrees.west,
-							rectangleDegrees.south,
-							rectangleDegrees.east,
-							rectangleDegrees.north
-						]
-						: item.rectangle,
-				west: item.west,
-				south: item.south,
-				east: item.east,
-				north: item.north,
-				alpha: item.alpha
-			}
-		})
-		.filter((item) => !!item.url)
+				const rectangleDegrees = item?.rectangle_degrees || item?.rectangle
+				return {
+					url: resolveAssetUrl(item.url || item.path || item.image_url || item.cesium_image_url || ''),
+					rectangle: Array.isArray(rectangleDegrees)
+						? rectangleDegrees
+						: rectangleDegrees
+							? [
+								rectangleDegrees.west,
+								rectangleDegrees.south,
+								rectangleDegrees.east,
+								rectangleDegrees.north
+							]
+							: item.rectangle,
+					west: item.west,
+					south: item.south,
+					east: item.east,
+					north: item.north,
+					alpha: item.alpha
+				}
+			})
+			.filter((item) => !!item.url)
 		: []
 
 	const singleCesiumUrl = result.n3125_cesium_image_url
@@ -447,32 +469,6 @@ const drawRoutePoints = (points, startIndex = 1) => {
 	}
 }
 
-const drawAnimatedRouteLine = (points) => {
-	if (!viewer.value || points.length < 2) return
-
-	const routeCartesian = points.map((point) => Cesium.Cartesian3.fromDegrees(point.lon, point.lat))
-	let progress = 2
-
-	routeLineEntity.value = viewer.value.entities.add({
-		polyline: {
-			positions: new Cesium.CallbackProperty(() => {
-				return routeCartesian.slice(0, Math.max(2, progress))
-			}, false),
-			width: 4,
-			material: Cesium.Color.fromCssColorString('#ffd166')
-		}
-	})
-
-	routeAnimationTimer = setInterval(() => {
-		if (progress >= routeCartesian.length) {
-			clearInterval(routeAnimationTimer)
-			routeAnimationTimer = null
-			return
-		}
-		progress += 1
-	}, 220)
-}
-
 const drawRouteEndpoints = ({ startPoint, endPoint, startName, endName, totalPointCount }) => {
 	if (!viewer.value) return
 
@@ -518,129 +514,6 @@ const drawRouteEndpoints = ({ startPoint, endPoint, startName, endName, totalPoi
 	buildEndpointEntity(endPoint, endName || 'End', END_PORT_COLOR, totalPointCount)
 }
 
-const renderRouteFromResult = (result) => {
-	clearRouteEntities()
-	const routeData = buildRouteRenderData(result)
-	if (routeData.linePoints.length < 2) return
-
-	const routePointStartIndex = routeData.startPoint ? 2 : 1
-	drawRoutePoints(routeData.keyPoints, routePointStartIndex)
-	drawAnimatedRouteLine(routeData.linePoints)
-	drawRouteEndpoints({
-		startPoint: routeData.startPoint,
-		endPoint: routeData.endPoint,
-		startName: routeData.startPortName,
-		endName: routeData.endPortName,
-		totalPointCount: routeData.linePoints.length
-	})
-}
-
-const loadRouteResult = async (result) => {
-	if (!viewer.value) initCesium()
-	await renderRouteImageLayers(result)
-	renderRouteFromResult(result)
-}
-
-const clearRouteResult = () => {
-	clearResultLayers()
-	clearRouteEntities()
-}
-
-const toStartOfDay = (date) => {
-	const d = new Date(date)
-	d.setHours(0, 0, 0, 0)
-	return d
-}
-
-const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
-
-const getBaseLayerProvider = () => {
-	return new Cesium.UrlTemplateImageryProvider({
-		url: 'https://webst02.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
-		minimumLevel: 0,
-		maximumLevel: 7
-	})
-}
-
-const createOverlayProvider = async (url) => {
-	return Cesium.SingleTileImageryProvider.fromUrl(url, {
-		rectangle: Cesium.Rectangle.fromDegrees(...props.initialCoords)
-	})
-}
-
-
-const mockFetchFutureSeaIceFrames = async () => {
-	// TODO: 接入后端接口，返回未来14天海冰图数据。
-	// 期望结构: [{ index: number, date: Date|string, url: string }]
-	return []
-}
-
-const createMockRoutePoints = (frameIndex = 0) => {
-	// 模拟一组从左下到右上的航线点，可替换为后端返回的真实点序列
-	const base = [
-		{ x: 420, y: 700 },
-		{ x: 600, y: 640 },
-		{ x: 800, y: 560 },
-		{ x: 980, y: 500 },
-		{ x: 1160, y: 430 },
-		{ x: 1360, y: 360 }
-	]
-	const offset = (frameIndex % 4) * 8
-	return base.map((p) => ({ x: p.x + offset, y: p.y - offset }))
-}
-
-const drawDashedRouteByPoints = ({ points, width = 2048, height = 1024 }) => {
-	const canvas = document.createElement('canvas')
-	canvas.width = width
-	canvas.height = height
-	const ctx = canvas.getContext('2d')
-	if (!ctx || !points || points.length < 2) return ''
-
-	// 先画每个航线点的外发光，强化点位可见性
-	for (const point of points) {
-		ctx.fillStyle = 'rgba(255, 0, 0, 0.25)'
-		ctx.beginPath()
-		ctx.arc(point.x, point.y, 16, 0, Math.PI * 2)
-		ctx.fill()
-	}
-
-	ctx.strokeStyle = 'rgba(255, 0, 0, 0.95)'
-	ctx.lineWidth = 6
-	ctx.setLineDash([16, 10])
-	ctx.lineCap = 'round'
-	ctx.beginPath()
-	ctx.moveTo(points[0].x, points[0].y)
-	for (let i = 1; i < points.length; i += 1) {
-		ctx.lineTo(points[i].x, points[i].y)
-	}
-	ctx.stroke()
-
-	// 再叠加实心点和白色描边，保证每个点都被着重标出
-	for (const point of points) {
-		ctx.fillStyle = 'rgba(255, 0, 0, 1)'
-		ctx.beginPath()
-		ctx.arc(point.x, point.y, 7, 0, Math.PI * 2)
-		ctx.fill()
-
-		ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)'
-		ctx.lineWidth = 2
-		ctx.setLineDash([])
-		ctx.beginPath()
-		ctx.arc(point.x, point.y, 7, 0, Math.PI * 2)
-		ctx.stroke()
-	}
-
-	return canvas.toDataURL('image/png')
-}
-
-const mockGenerateRouteOverlay = async ({ startPoint, endPoint, frameIndex }) => {
-	void startPoint
-	void endPoint
-	const points = createMockRoutePoints(frameIndex)
-	// TODO: 接入后端接口后，将 points 替换为真实航线点序列。
-	return drawDashedRouteByPoints({ points })
-}
-
 const removeLayerIfExists = (layerRef) => {
 	if (!imageryLayers.value || !layerRef.value) return
 	try {
@@ -651,39 +524,189 @@ const removeLayerIfExists = (layerRef) => {
 	layerRef.value = null
 }
 
-// 
-const renderFrameWithRoute = async ({ frameIndex, startPoint, endPoint }) => {
-	if (!imageryLayers.value) return
-
-	const frames = await mockFetchFutureSeaIceFrames()
-	if (!frames.length) return
-	const safeIndex = clamp(frameIndex, 0, frames.length - 1)
-
-	removeLayerIfExists(seaIceLayer)
-	removeLayerIfExists(routeLayer)
-
-	const seaProvider = await createOverlayProvider(frames[safeIndex].url)
-	seaIceLayer.value = imageryLayers.value.addImageryProvider(seaProvider)
-	seaIceLayer.value.alpha = 0.82
-
-	const routeOverlayUrl = await mockGenerateRouteOverlay({
-		startPoint,
-		endPoint,
-		frameIndex: safeIndex
+const createOverlayProvider = async (frame) => {
+	return Cesium.SingleTileImageryProvider.fromUrl(frame.cesiumUrl, {
+		rectangle: resolveRectangle(frame)
 	})
-	if (!routeOverlayUrl) return
-	const routeProvider = await createOverlayProvider(routeOverlayUrl)
-	routeLayer.value = imageryLayers.value.addImageryProvider(routeProvider)
-	routeLayer.value.alpha = 1
-	imageryLayers.value.raiseToTop(routeLayer.value)
 }
 
-const toFrameIndex = (targetDate) => {
-	const today = toStartOfDay(new Date())
-	const selected = toStartOfDay(targetDate || today)
-	const dayMs = 24 * 60 * 60 * 1000
-	const diff = Math.floor((selected.getTime() - today.getTime()) / dayMs)
-	return clamp(diff, 0, 13)
+const getPlaybackFrames = () => {
+	if (props.localRiskFrames.length) return props.localRiskFrames
+	if (props.seaIceFrames.length) return props.seaIceFrames
+	const resultDates = Array.isArray(props.routeResult?.voyage_dates)
+		? props.routeResult.voyage_dates
+		: Array.isArray(props.routeResult?.route_dates)
+			? props.routeResult.route_dates
+			: Array.isArray(props.routeResult?.dates)
+				? props.routeResult.dates
+				: []
+
+	return resultDates.map((item) => {
+		const dateValue = typeof item === 'string' ? item : item?.date || item?.voyage_date || item?.current_date || ''
+		const date = dateValue ? new Date(dateValue) : null
+		if (!date || Number.isNaN(date.getTime())) {
+			return {
+				dateKey: '',
+				dateLabel: ''
+			}
+		}
+		const year = date.getFullYear()
+		const month = String(date.getMonth() + 1).padStart(2, '0')
+		const day = String(date.getDate()).padStart(2, '0')
+		return {
+			dateKey: `${year}-${month}-${day}`,
+			dateLabel: `${month}-${day}`
+		}
+	}).filter((item) => item.dateKey)
+}
+
+const renderSeaIceFrame = async (frame) => {
+	removeLayerIfExists(seaIceLayer)
+	if (!frame?.cesiumUrl || !imageryLayers.value) return
+	try {
+		const provider = await createOverlayProvider(frame)
+		seaIceLayer.value = imageryLayers.value.addImageryProvider(provider)
+		seaIceLayer.value.alpha = typeof frame.alpha === 'number' ? frame.alpha : 0.82
+	} catch (e) {
+		seaIceLayer.value = null
+	}
+}
+
+const emitPlaybackState = (index, dateKey, dateLabel) => {
+	const localRiskFrame = props.localRiskFrames.find((item) => item?.dateKey === dateKey) || null
+	currentDateLabel.value = dateLabel || ''
+	emit('playback-change', {
+		index,
+		dateKey: dateKey || '',
+		dateLabel: dateLabel || '',
+		localRiskFrame
+	})
+}
+
+const startSynchronizedPlayback = async (routeData) => {
+	stopRoutePlayback()
+
+	const routeCartesian = routeData.linePoints.map((point) => Cesium.Cartesian3.fromDegrees(point.lon, point.lat))
+	if (routeCartesian.length < 2) {
+		clearPlaybackState()
+		return
+	}
+
+	const timelineFrames = getPlaybackFrames()
+	const playbackDates = timelineFrames.map((frame) => frame?.dateKey).filter(Boolean)
+	const totalSegments = Math.max(1, routeCartesian.length - 1)
+	const uniqueDateCount = Math.max(playbackDates.length, 1)
+
+	if (!playbackDates.length) {
+		clearPlaybackState()
+		routeLineEntity.value = viewer.value.entities.add({
+			polyline: {
+				positions: routeCartesian,
+				width: 4,
+				material: Cesium.Color.fromCssColorString('#ffd166')
+			}
+		})
+		return
+	}
+
+	let progress = 2
+	let segmentProgress = 0
+	let activeDateIndex = 0
+
+	routeLineEntity.value = viewer.value.entities.add({
+		polyline: {
+			positions: new Cesium.CallbackProperty(() => {
+				const maxPointCount = Math.max(2, Math.floor(progress))
+				return routeCartesian.slice(0, Math.min(routeCartesian.length, maxPointCount))
+			}, false),
+			width: 4,
+			material: Cesium.Color.fromCssColorString('#ffd166')
+		}
+	})
+
+	const dateThresholds = Array.from({ length: uniqueDateCount }, (_, index) => {
+		if (uniqueDateCount === 1) return totalSegments
+		return Math.round((index / (uniqueDateCount - 1)) * totalSegments)
+	})
+
+	const applyDateFrame = async (dateIndex) => {
+		const safeIndex = Math.min(Math.max(dateIndex, 0), playbackDates.length - 1)
+		const dateKey = playbackDates[safeIndex] || ''
+		const timelineFrame = timelineFrames.find((item) => item?.dateKey === dateKey) || null
+		const dateLabel = timelineFrame?.dateLabel || ''
+		const matchedSeaIceFrame = props.seaIceFrames.find((item) => item?.dateKey === dateKey) || null
+
+		emitPlaybackState(safeIndex, dateKey, dateLabel)
+		await renderSeaIceFrame(matchedSeaIceFrame)
+	}
+
+	await applyDateFrame(activeDateIndex)
+
+	if (totalSegments <= 0) return
+
+	routeAnimationTimer = setInterval(() => {
+		if (segmentProgress >= totalSegments) {
+			stopRoutePlayback()
+			return
+		}
+
+		segmentProgress = Math.min(totalSegments, segmentProgress + 1 / ROUTE_PROGRESS_SUBSTEPS)
+		progress = Math.min(routeCartesian.length, Math.max(2, 2 + segmentProgress))
+
+		let nextDateIndex = activeDateIndex
+		while (
+			nextDateIndex + 1 < dateThresholds.length
+			&& segmentProgress >= dateThresholds[nextDateIndex + 1]
+		) {
+			nextDateIndex += 1
+		}
+
+		if (nextDateIndex !== activeDateIndex) {
+			activeDateIndex = nextDateIndex
+			void applyDateFrame(activeDateIndex)
+		}
+	}, ROUTE_FRAME_INTERVAL)
+}
+
+const renderRouteFromResult = async (result) => {
+	clearRouteEntities()
+	const routeData = buildRouteRenderData(result)
+	if (routeData.linePoints.length < 2) {
+		clearPlaybackState()
+		return
+	}
+
+	const routePointStartIndex = routeData.startPoint ? 2 : 1
+	drawRoutePoints(routeData.keyPoints, routePointStartIndex)
+	drawRouteEndpoints({
+		startPoint: routeData.startPoint,
+		endPoint: routeData.endPoint,
+		startName: routeData.startPortName,
+		endName: routeData.endPortName,
+		totalPointCount: routeData.linePoints.length
+	})
+	await startSynchronizedPlayback(routeData)
+}
+
+const loadRouteResult = async (result) => {
+	if (!viewer.value) initCesium()
+	await renderRouteImageLayers(result)
+	await renderRouteFromResult(result)
+}
+
+const clearRouteResult = () => {
+	clearResultLayers()
+	removeLayerIfExists(seaIceLayer)
+	clearRouteEntities()
+	clearPlaybackState()
+}
+
+const getBaseLayerProvider = () => {
+	return new Cesium.UrlTemplateImageryProvider({
+		url: 'https://webst02.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
+		minimumLevel: 0,
+		maximumLevel: 7
+	})
 }
 
 const initCesium = () => {
@@ -733,32 +756,9 @@ const initCesium = () => {
 	}
 }
 
-const renderMockRoute = async ({ targetDate, startPoint, endPoint }) => {
-	if (!viewer.value) initCesium()
-	const frameIndex = toFrameIndex(targetDate)
-	await renderFrameWithRoute({ frameIndex, startPoint, endPoint })
-	return { frameIndex }
-}
-
-
-const fetchDailyForecastData = async () => {
-    try {
-        const response = await get_daily_realtime_tiles()
-        dailyForecastData.value = response || []
-    } catch (e) {
-        dailyForecastData.value = []
-    }
-}
-
 onMounted(async () => {
 	initCesium()
 	renderPortEntities()
-    await fetchDailyForecastData()
-	await renderFrameWithRoute({
-		frameIndex: 0,
-		startPoint: props.selectedStartPoint || props.routePorts[0]?.name || '',
-		endPoint: props.selectedEndPoint || props.routePorts[1]?.name || props.routePorts[0]?.name || ''
-	})
 
 	if (props.routeResult) {
 		await loadRouteResult(props.routeResult)
@@ -777,11 +777,19 @@ watch(
 	() => props.routeResult,
 	(newResult) => {
 		if (!newResult) {
-			clearResultLayers()
-			clearRouteEntities()
+			clearRouteResult()
 			return
 		}
-		loadRouteResult(newResult)
+		void loadRouteResult(newResult)
+	},
+	{ deep: true }
+)
+
+watch(
+	() => [props.seaIceFrames, props.localRiskFrames],
+	() => {
+		if (!props.routeResult) return
+		void loadRouteResult(props.routeResult)
 	},
 	{ deep: true }
 )
@@ -810,16 +818,19 @@ onBeforeUnmount(() => {
 	creditEl = null
 	portEntities.clear()
 	clearResultLayers()
+	removeLayerIfExists(seaIceLayer)
 	clearRouteEntities()
+	clearPlaybackState()
 })
 
-defineExpose({ renderMockRoute, loadRouteResult, clearRouteResult })
+defineExpose({ loadRouteResult, clearRouteResult })
 </script>
 
 <style scoped lang="scss">
 .routeSphereContainer {
 	width: 100%;
 	height: 100%;
+	position: relative;
 }
 
 .cesiumContainer {
@@ -827,5 +838,20 @@ defineExpose({ renderMockRoute, loadRouteResult, clearRouteResult })
 	height: 100%;
 	border-radius: 10px;
 	overflow: hidden;
+}
+
+.currentDateBadge {
+	position: absolute;
+	top: 12px;
+	left: 12px;
+	padding: 6px 10px;
+	border-radius: 999px;
+	background: rgba(8, 13, 20, 0.78);
+	border: 1px solid rgba(255, 255, 255, 0.16);
+	color: #fff;
+	font-size: 12px;
+	line-height: 1;
+	backdrop-filter: blur(6px);
+	pointer-events: none;
 }
 </style>
