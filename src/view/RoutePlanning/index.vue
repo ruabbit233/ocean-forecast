@@ -7,11 +7,14 @@
                 <section class="formRow">
                     <b-field :label="t('routePlanning.departureDate')">
                         <b-datepicker
+                            class="departureDatePicker"
                             v-model="departureDate"
                             size="is-small"
                             :placeholder="t('routePlanning.datePlaceholder')"
                             :min-date="departureDateMin"
                             :max-date="departureDateMax"
+                            :date-formatter="formatDepartureDateForDisplay"
+                            :mobile-native="false"
                             trap-focus
                         />
                     </b-field>
@@ -238,6 +241,14 @@ const formatDepartureDate = (date) => {
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
     return `${year}-${month}-${day}`
+}
+
+// 仅控制选择器输入框的显示；v-model 仍保留完整 Date，提交时仍使用 YYYY-MM-DD。
+const formatDepartureDateForDisplay = (date) => {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return ''
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${month}-${day}`
 }
 
 const isDepartureDateInRange = (date) => {
@@ -610,6 +621,11 @@ $container-height: 560px;
 
         .formRow {
             margin-bottom: 14px;
+        }
+
+        // 可选日期范围固定在 2025 年，日历弹层无需向用户展示年份。
+        :deep(.departureDatePicker .datepicker-header .pagination-list .field > .control:nth-child(2)) {
+            display: none;
         }
 
         .radioItem {
